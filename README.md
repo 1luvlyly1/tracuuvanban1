@@ -81,18 +81,18 @@ flowchart LR
 
 ## 3. Retrieval — các kỹ thuật đã dùng
 
-`retrieval/hybrid_retriever.py` (`hybrid_search()`) là điểm hội tụ; `services/rag_chain_v2.py` điều phối thêm các kỹ thuật ở tầng trên. Danh sách kỹ thuật đang chạy trong production:
+Danh sách kỹ thuật đang chạy trong production:
 
-- **Hybrid search (vector + keyword)** — vector search ngữ nghĩa trên Qdrant (`vector_retriever.py`) song song với full-text search trên PostgreSQL `tsvector` (`keyword_retriever.py`, fallback `ILIKE`).
-- **Reciprocal Rank Fusion (RRF)** — hợp nhất thứ hạng hai nguồn trên (`_reciprocal_rank_fusion` trong `hybrid_retriever.py`).
-- **Direct lookup theo số Điều / số văn bản** — khi câu hỏi nêu rõ mốc tra cứu, `_direct_article_lookup()` truy vấn thẳng PostgreSQL thay vì qua semantic search.
-- **Rerank bằng cross-encoder** — `reranker.py`, model `BAAI/bge-reranker-v2-m3` (fallback CrossEncoder khác) chấm lại điểm các passage sau khi hợp nhất.
-- **Multi-query expansion** — *không phải* decomposition câu hỏi phức hợp thành nhiều câu con, mà là viết lại câu hỏi gốc thành 2–3 biến thể để tăng recall từ khoá (`services/query_expansion.py: expand_query()`), rồi retrieval từng biến thể và gộp khử trùng lặp (`rag_chain_v2._multi_query_retrieve()`, `dedup_chunks`). Kích hoạt khi `strategy_router` chọn `STRATEGY_MULTI_QUERY` hoặc bị ép buộc từ tín hiệu intent.
-- **Parent–child retrieval** — chunk nhỏ theo Khoản để tìm chính xác, nhưng trả ngữ cảnh theo Điều (cha) để đủ căn cứ. Ingestion (`pipeline/legal_chunker.py`) tạo 3 tầng chunk/Điều (toàn Điều, từng Khoản, chunk phụ khi vượt ngưỡng token); `VectorChunk` giữ khoá ngoại tới cả `Article` (cha) và `Clause` (con). Khi kết quả retrieval chỉ có vài Khoản rời rạc, `rag_chain_v2._fallback_full_article_retrieval()` lấy bổ sung toàn bộ Khoản còn thiếu của tối đa 3 Điều điểm rerank cao nhất (`_fetch_full_article_chunks`), rồi `article_grouper.group_chunks_by_article()` gom lại theo Điều trước khi đưa vào prompt.
-- **Domain / topic filtering** — lọc theo lĩnh vực pháp luật (`legal_domain`, `law_intents`) khi câu hỏi xác định được domain; sau rerank còn áp `TOPIC_MISMATCH_PENALTY` để hạ điểm passage lệch chủ đề (`_apply_topic_mismatch_penalty`).
-- **Subject-anchor retry (neo chủ đề)** — khi kết quả không khớp các từ khoá chủ thể trích từ câu hỏi (`_query_subject_anchor_phrases`), thử lại retrieval với câu truy vấn neo theo chủ đề đó.
-- **Amendment expansion** — với văn bản dạng sửa đổi/bổ sung, mở rộng lấy thêm passage từ văn bản gốc/liên quan (`_collect_amendment_expand_document_ids`, `_merge_amendment_expanded_passages`).
-- **Diversify & dynamic top-N theo Điều** — sau cùng, `article_selection.diversify_by_article()` và `dynamic_max_articles()` cân bằng số Điều khác nhau trong kết quả thay vì để một Điều chiếm hết top-K.
+- **Hybrid search (vector + keyword)** — vector search ngữ nghĩa trên Qdrant song song với full-text search trên PostgreSQL, fallback so khớp gần đúng khi thiếu chỉ mục.
+- **Reciprocal Rank Fusion (RRF)** — hợp nhất thứ hạng giữa hai nguồn vector và keyword.
+- **Direct lookup theo số Điều / số văn bản** — khi câu hỏi nêu rõ mốc tra cứu, truy vấn thẳng PostgreSQL thay vì qua semantic search.
+- **Rerank bằng cross-encoder** — chấm lại điểm các passage sau khi hợp nhất (model `BAAI/bge-reranker-v2-m3`, có fallback).
+- **Multi-query expansion** — *không phải* decomposition câu hỏi phức hợp thành nhiều câu con, mà là viết lại câu hỏi gốc thành 2–3 biến thể để tăng recall từ khoá, retrieval từng biến thể rồi gộp khử trùng lặp.
+- **Parent–child retrieval** — chunk nhỏ theo Khoản để tìm chính xác, nhưng trả ngữ cảnh theo Điều (cha) để đủ căn cứ pháp lý; khi kết quả chỉ có vài Khoản rời rạc, hệ thống lấy bổ sung toàn bộ Khoản còn thiếu của các Điều điểm cao nhất rồi gom lại theo Điều trước khi đưa vào prompt.
+- **Domain / topic filtering** — lọc theo lĩnh vực pháp luật khi câu hỏi xác định được domain; sau rerank còn hạ điểm các passage lệch chủ đề.
+- **Subject-anchor retry (neo chủ đề)** — khi kết quả không khớp các từ khoá chủ thể trích từ câu hỏi, thử lại retrieval với câu truy vấn neo theo chủ đề đó.
+- **Amendment expansion** — với văn bản dạng sửa đổi/bổ sung, mở rộng lấy thêm passage từ văn bản gốc/liên quan.
+- **Diversify & dynamic top-N theo Điều** — cân bằng số Điều khác nhau trong kết quả thay vì để một Điều chiếm hết top-K.
 
 ## 4. Luồng chat production (`rag_chain_v2`)
 
