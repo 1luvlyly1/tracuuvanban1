@@ -6,46 +6,9 @@ Hệ thống RAG (Retrieval-Augmented Generation) cho tra cứu văn bản pháp
 
 ## 1. Kiến trúc tổng quan
 
-```mermaid
-flowchart TB
-  subgraph client["Client"]
-    FE["Frontend — React 18 + Vite"]
-  end
+Frontend (React) gọi vào backend FastAPI qua các nhóm endpoint: `/api/chat*` (chat chính, xử lý bởi `rag_chain_v2`), `/api/copilot/*` (lớp Copilot, gọi lại `rag_chain_v2` qua `copilot_agent` + `rag_unified`), `/api/upload` và `/api/documents`/`/api/datasets` (nạp tài liệu, xử lý bởi pipeline ingestion), `/api/search` (truy hồi thuần), cùng các nhóm phụ `/api/procedures`, `/api/conversations`, `/api/tools`, `/api/health`.
 
-  subgraph api["Backend — FastAPI (backend/main.py)"]
-    CHAT["/api/chat*\nchat_router → rag_chain_v2"]
-    COP["/api/copilot/*\ncopilot_router → copilot_agent → rag_unified → rag_chain_v2"]
-    DOC["/api/upload, /api/documents, /api/datasets\ndocument_router_v2 → pipeline (ingest)"]
-    SR["/api/search\nsearch_router → hybrid_search"]
-    PROC["/api/procedures/*"]
-    CONV["/api/conversations/*"]
-    TOOLS["/api/tools/*"]
-    HEALTH["/api/health"]
-  end
-
-  subgraph data["Hạ tầng dữ liệu"]
-    PG[("PostgreSQL\ndocuments/chapters/sections/articles/clauses\nvector_chunks, chat logs")]
-    QD[("Qdrant\nvector embeddings")]
-    RD[("Redis\ncache câu trả lời")]
-  end
-
-  LLM[["OpenAI API\n(chat, rerank hỗ trợ, phân loại)"]]
-
-  FE --> CHAT
-  FE --> COP
-  FE --> DOC
-  FE --> CONV
-
-  CHAT --> PG
-  CHAT --> QD
-  CHAT --> RD
-  CHAT --> LLM
-  COP --> CHAT
-  DOC --> PG
-  DOC --> QD
-  SR --> PG
-  SR --> QD
-```
+Ba nhánh chat/copilot/upload đều đọc-ghi ba kho dữ liệu: **PostgreSQL** (văn bản, chương/mục/điều/khoản, chunk vector, log hội thoại), **Qdrant** (vector embedding) và **Redis** (cache câu trả lời — nhánh chat mới dùng). Nhánh chat còn gọi ra **OpenAI API** để sinh câu trả lời, hỗ trợ rerank và phân loại.
 
 ### Thành phần chính
 
@@ -65,19 +28,7 @@ flowchart TB
 
 ## 2. Luồng ingestion (đưa văn bản vào hệ thống)
 
-```mermaid
-flowchart LR
-  DOCX[DOCX upload] --> PARSE["parser: đọc + làm sạch text"]
-  PARSE --> STRUCT["pipeline: tách Chương/Mục/Điều/Khoản"]
-  STRUCT --> CLASSIFY["domain_classifier: gán nhãn lĩnh vực pháp luật"]
-  CLASSIFY --> PGW[("PostgreSQL\ndocuments/articles/clauses")]
-  STRUCT --> CHUNK["chunk theo Khoản + metadata"]
-  CHUNK --> EMBED["embedding: sentence-transformers"]
-  EMBED --> QDW[("Qdrant\nvector_chunks")]
-  CHUNK --> PGW
-```
-
-Điểm vào: `pipeline/ingestor.py`, thường được gọi qua `POST /api/upload` (`routers/document_router_v2.py`).
+Điểm vào: `pipeline/ingestor.py`, thường được gọi qua `POST /api/upload` (`routers/document_router_v2.py`). File DOCX được đọc và làm sạch text, sau đó tách thành cấu trúc Chương/Mục/Điều/Khoản. Từ cấu trúc này, hệ thống gán nhãn lĩnh vực pháp luật rồi ghi metadata (văn bản, điều, khoản) vào PostgreSQL; song song, nội dung được chunk theo từng Khoản, embedding bằng sentence-transformers, rồi ghi vector vào Qdrant.
 
 ## 3. Retrieval — các kỹ thuật đã dùng
 
