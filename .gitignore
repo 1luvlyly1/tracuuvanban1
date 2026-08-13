@@ -1,0 +1,68 @@
+# =========================
+# ENV (bảo mật)
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# =========================
+# Virtual Environment
+# =========================
+venv/
+env/
+.venv/
+
+# =========================
+# Testing
+# =========================
+.pytest_cache/
+.coverage
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+.cursor/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Build / cache
+# =========================
+dist/
+build/
+*.egg-info/
+
+# =========================
+# Node (frontend nếu có)
+# =========================
+node_modules/
+.next/
+out/
+backend/app/storage/
+
+# =========================
+# Database
+# =========================
+data_clean.json
+data.json
+backend/tests/
+# =========================
+# Model
+# =========================
+backend/app/intent_model/
+*.safetensors

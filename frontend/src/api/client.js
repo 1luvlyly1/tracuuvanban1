@@ -1,0 +1,199 @@
+/**
+ * API helpers – fetch + SSE streaming cho RAG Chatbot backend.
+ */
+
+const BASE = "";
+
+/** FastAPI detail: string | { msg }[] | object */
+function formatApiDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => (e && typeof e === "object" ? e.msg || JSON.stringify(e) : String(e)))
+      .join("; ");
+  }
+  if (typeof detail === "object") return JSON.stringify(detail);
+  return String(detail);
+}
+
+async function apiFetch(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json", ...options.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const msg = formatApiDetail(err.detail);
+    throw new Error(msg || `Request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function uploadDocx(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/api/upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(formatApiDetail(err.detail) || "Upload thất bại");
+  }
+  return res.json();
+}
+
+export async function uploadFolder(files) {
+  const form = new FormData();
+  for (const file of files) {
+    form.append("files", file);
+  }
+  const res = await fetch(`${BASE}/api/upload-folder`, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(formatApiDetail(err.detail) || "Upload folder thất bại");
+  }
+  return res.json();
+}
+
+export async function getDatasets() {
+  return apiFetch("/api/datasets");
+}
+
+export async function deleteDataset(id) {
+  return apiFetch(`/api/datasets/${id}`, { method: "DELETE" });
+}
+
+export async function getIntentIndexStats() {
+  return apiFetch("/api/intent/index-stats");
+}
+
+export async function listConversations() {
+  return apiFetch("/api/conversations");
+}
+
+export async function createConversation(title) {
+  return apiFetch("/api/conversations", {
+    method: "POST",
+    body: JSON.stringify({ title: title || undefined }),
+  });
+}
+
+export async function getConversationDetail(id) {
+  return apiFetch(`/api/conversations/${id}`);
+}
+
+export async function deleteConversationApi(id) {
+  return apiFetch(`/api/conversations/${id}`, { method: "DELETE" });
+}
+
+export async function chatStream(
+  question,
+  temperature,
+  onToken,
+  onSources,
+  onDone,
+  conversationId = null,
+  onMeta = null,
+  onTextFinalize = null
+) {
+  const res = await fetch(`${BASE}/api/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question,
+      temperature,
+      conversation_id: conversationId || undefined,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Chat request thất bại");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  /** Gom token trong một khung hình — tránh React 18 gộp hàng trăm setState trong một chunk SSE. */
+  let tokenBatch = "";
+  let rafId = null;
+  const flushTokenBatch = () => {
+    rafId = null;
+    if (tokenBatch && onToken) {
+      const chunk = tokenBatch;
+      tokenBatch = "";
+      onToken(chunk);
+    }
+  };
+  const scheduleTokenFlush = () => {
+    if (rafId != null) return;
+    rafId = requestAnimationFrame(flushTokenBatch);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data: ")) continue;
+      const payload = trimmed.slice(6);
+
+      if (payload === "[DONE]") {
+        if (rafId != null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        flushTokenBatch();
+        onDone?.();
+        return;
+      }
+
+      try {
+        const data = JSON.parse(payload);
+        if (data.token) {
+          try {
+            const inner = JSON.parse(data.token);
+            if (inner.type === "sources") {
+              onSources?.(inner.data);
+              continue;
+            }
+            if (inner.type === "meta") {
+              onMeta?.(inner);
+              continue;
+            }
+            if (inner.type === "text_finalize") {
+              if (rafId != null) {
+                cancelAnimationFrame(rafId);
+                rafId = null;
+              }
+              flushTokenBatch();
+              onTextFinalize?.(inner);
+              continue;
+            }
+            if (inner.type === "intent") {
+              continue;
+            }
+          } catch {
+          }
+          tokenBatch += data.token;
+          scheduleTokenFlush();
+        }
+      } catch {
+      }
+    }
+  }
+  if (rafId != null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  flushTokenBatch();
+  onDone?.();
+}
+
+export async function getGpuStatus() {
+  return apiFetch("/api/gpu");
+}
